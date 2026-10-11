@@ -48,7 +48,7 @@
 
             if (Directory.Exists(destinationFile))
                 throw new IOException($"File conflicts with an existing directory: {destinationFile}");
-            if (Directory.Exists(versionDirectory))
+            if (Directory.Exists(versionDirectory) && HasVersionFiles(versionDirectory, Path.GetExtension(destinationFile)))
             {
                 AddToExistingVersions(sourceFile, versionDirectory);
                 return;
@@ -73,6 +73,15 @@
 
             string newVersion = Path.Combine(versionDirectory, $"{highestVersion + 1}{extension}");
             File.Copy(sourceFile, newVersion);
+        }
+
+        private static bool HasVersionFiles(string versionDirectory, string extension)
+        {
+            return
+                Directory.GetFiles(versionDirectory)
+                    .Any(file => Path.GetExtension(file)
+                    .Equals(extension, StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(Path.GetFileNameWithoutExtension(file), out _));
         }
 
         private void AddToExistingVersions(string sourceFile, string versionDirectory)
