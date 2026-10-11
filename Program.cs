@@ -106,76 +106,80 @@ namespace Valve_Diff_Tool
                     return 0;
                 }
 
-                string build = builds[progress.BuildIndex];
-                if (!PathEquals(progress.ActiveBuildPath, build))
+                while (progress.BuildIndex < builds.Count)
                 {
-                    throw new InvalidOperationException(
-                        "The build order no longer matches progress.json. No data was cleared." + Environment.NewLine +
-                        $"Checkpoint build: {progress.ActiveBuildPath}{Environment.NewLine}" +
-                        $"Build at saved index {progress.BuildIndex}: {build}{Environment.NewLine}" +
-                        "Restore the original input set/order, or remove progress.json to start over.");
-                }
+                    string build = builds[progress.BuildIndex];
+                    if (!PathEquals(progress.ActiveBuildPath, build))
+                    {
+                        throw new InvalidOperationException(
+                            "The build order no longer matches progress.json. No data was cleared." + Environment.NewLine +
+                            $"Checkpoint build: {progress.ActiveBuildPath}{Environment.NewLine}" +
+                            $"Build at saved index {progress.BuildIndex}: {build}{Environment.NewLine}" +
+                            "Restore the original input set/order, or remove progress.json to start over.");
+                    }
 
-                if (progress.Stage != PrepareStage && progress.Stage != MergeStage)
-                    throw new InvalidDataException($"Unknown checkpoint stage '{progress.Stage}' in {checkpointPath}");
+                    if (progress.Stage != PrepareStage && progress.Stage != MergeStage)
+                        throw new InvalidDataException($"Unknown checkpoint stage '{progress.Stage}' in {checkpointPath}");
 
-                Console.WriteLine($"Found {builds.Count} builds.");
-                Console.WriteLine($"Build {progress.BuildIndex + 1}/{builds.Count}: {Path.GetFileName(build)}");
+                    Console.WriteLine($"Found {builds.Count} builds.");
+                    Console.WriteLine($"Build {progress.BuildIndex + 1}/{builds.Count}: {Path.GetFileName(build)}");
 
-                if (progress.Stage == PrepareStage)
-                {
+                    if (progress.Stage == PrepareStage)
+                    {
+                        directories.ClearDirectory(tempDirectory);
+                        File.WriteAllText(mergeJournalPath, string.Empty);
+
+                        Console.WriteLine("Copying build subdirectories...");
+                        directories.CopySubdirectories(build, tempDirectory);
+
+                        Console.WriteLine("Extracting VPK archives...");
+                        await extraction.ExtractVpkArchivesAsync(build, tempDirectory, vpkEditCliPath);
+
+                        progress.Stage = MergeStage;
+                        SaveProgress(checkpointPath, progress);
+                    }
+                    else
+                        Console.WriteLine("Resuming at MERGE stage. TEMP is being preserved.");
+
+                    HashSet<string> completedFiles = LoadCompletedFiles(mergeJournalPath);
+                    Console.WriteLine($"Resuming merge with {completedFiles.Count} file(s) already recorded as complete.");
+
+                    using (var journalStream = new FileStream(
+                        mergeJournalPath,
+                        FileMode.Append,
+                        FileAccess.Write,
+                        FileShare.Read))
+                    using (var journalWriter = new StreamWriter(journalStream, new UTF8Encoding(false)))
+                    {
+                        merger.MergeDirectory(
+                            tempDirectory,
+                            mergedDirectory,
+                            completedFiles,
+                            relativePath =>
+                            {
+                                journalWriter.WriteLine(JsonSerializer.Serialize(relativePath));
+                                journalWriter.Flush();
+                            });
+                    }
+
+                    progress.BuildIndex++;
+                    progress.Stage = PrepareStage;
+                    progress.ActiveBuildPath = progress.BuildIndex < builds.Count
+                        ? builds[progress.BuildIndex]
+                        : null;
+                    SaveProgress(checkpointPath, progress);
+
                     directories.ClearDirectory(tempDirectory);
                     File.WriteAllText(mergeJournalPath, string.Empty);
 
-                    Console.WriteLine("Copying build subdirectories...");
-                    directories.CopySubdirectories(build, tempDirectory);
-
-                    Console.WriteLine("Extracting VPK archives...");
-                    await extraction.ExtractVpkArchivesAsync(build, tempDirectory, vpkEditCliPath);
-
-                    progress.Stage = MergeStage;
-                    SaveProgress(checkpointPath, progress);
-                }
-                else
-                    Console.WriteLine("Resuming at MERGE stage. TEMP is being preserved.");
-
-                HashSet<string> completedFiles = LoadCompletedFiles(mergeJournalPath);
-                Console.WriteLine($"Resuming merge with {completedFiles.Count} file(s) already recorded as complete.");
-
-                using (var journalStream = new FileStream(
-                    mergeJournalPath,
-                    FileMode.Append,
-                    FileAccess.Write,
-                    FileShare.Read))
-                using (var journalWriter = new StreamWriter(journalStream, new UTF8Encoding(false)))
-                {
-                    merger.MergeDirectory(
-                        tempDirectory,
-                        mergedDirectory,
-                        completedFiles,
-                        relativePath =>
-                        {
-                            journalWriter.WriteLine(JsonSerializer.Serialize(relativePath));
-                            journalWriter.Flush();
-                        });
+                    Console.WriteLine("Build merged successfully.");
+                    Console.WriteLine($"Progress: {progress.BuildIndex}/{builds.Count} build(s) completed.");
+                    Console.WriteLine($"Checkpoint: {checkpointPath}");
+                    Console.WriteLine($"Merged archive: {mergedDirectory}");
                 }
 
-                progress.BuildIndex++;
-                progress.Stage = PrepareStage;
-                progress.ActiveBuildPath = progress.BuildIndex < builds.Count
-                    ? builds[progress.BuildIndex]
-                    : null;
-                SaveProgress(checkpointPath, progress);
-
-                directories.ClearDirectory(tempDirectory);
-                File.WriteAllText(mergeJournalPath, string.Empty);
-
-                Console.WriteLine("Build merged successfully.");
-                Console.WriteLine($"Progress: {progress.BuildIndex}/{builds.Count} build(s) completed.");
-                Console.WriteLine($"Checkpoint: {checkpointPath}");
-                Console.WriteLine($"Merged archive: {mergedDirectory}");
-                Console.WriteLine("TEST MODE: one build processed this run.");
-
+                Console.WriteLine($"All {builds.Count} builds have been processed.");
+                Console.ReadKey();
                 return 0;
             }
             catch (Exception exception)
