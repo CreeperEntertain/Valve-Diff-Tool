@@ -53,7 +53,7 @@ namespace Valve_Diff_Tool
                 List<string> builds = discovery.DiscoverAndSort(inputDirectory);
                 if (builds.Count == 0)
                 {
-                    Console.WriteLine("No build directories found.");
+                    WriteColoredLine("No build directories found.", ConsoleColor.Yellow);
                     return 1;
                 }
 
@@ -86,7 +86,7 @@ namespace Valve_Diff_Tool
                     {
                         progress.Stage = MergeStage;
                         File.WriteAllText(mergeJournalPath, string.Empty);
-                        Console.WriteLine("Existing TEMP will be merged into MERGED; it will not be cleared or re-extracted.");
+                        WriteColoredLine("Existing TEMP will be merged into MERGED; it will not be cleared or re-extracted.", ConsoleColor.Yellow);
                     }
 
                     SaveProgress(checkpointPath, progress);
@@ -122,27 +122,27 @@ namespace Valve_Diff_Tool
                         throw new InvalidDataException($"Unknown checkpoint stage '{progress.Stage}' in {checkpointPath}");
 
                     Console.WriteLine($"Found {builds.Count} builds.");
-                    Console.WriteLine($"Build {progress.BuildIndex + 1}/{builds.Count}: {Path.GetFileName(build)}");
+                    WriteColoredLine($"Build {progress.BuildIndex + 1}/{builds.Count}: {Path.GetFileName(build)}", ConsoleColor.Cyan);
 
                     if (progress.Stage == PrepareStage)
                     {
                         directories.ClearDirectory(tempDirectory);
                         File.WriteAllText(mergeJournalPath, string.Empty);
 
-                        Console.WriteLine("Copying build subdirectories...");
+                        WriteColoredLine("Copying build subdirectories...", ConsoleColor.Yellow);
                         directories.CopySubdirectories(build, tempDirectory);
 
-                        Console.WriteLine("Extracting VPK archives...");
+                        WriteColoredLine("Extracting VPK archives...", ConsoleColor.Yellow);
                         await extraction.ExtractVpkArchivesAsync(build, tempDirectory, vpkEditCliPath);
 
                         progress.Stage = MergeStage;
                         SaveProgress(checkpointPath, progress);
                     }
                     else
-                        Console.WriteLine("Resuming at MERGE stage. TEMP is being preserved.");
+                        WriteColoredLine("Resuming at MERGE stage. TEMP is being preserved.", ConsoleColor.Yellow);
 
                     HashSet<string> completedFiles = LoadCompletedFiles(mergeJournalPath);
-                    Console.WriteLine($"Resuming merge with {completedFiles.Count} file(s) already recorded as complete.");
+                    WriteColoredLine($"Resuming merge with {completedFiles.Count} file(s) already recorded as complete.", ConsoleColor.Yellow);
 
                     using (var journalStream = new FileStream(
                         mergeJournalPath,
@@ -172,13 +172,13 @@ namespace Valve_Diff_Tool
                     directories.ClearDirectory(tempDirectory);
                     File.WriteAllText(mergeJournalPath, string.Empty);
 
-                    Console.WriteLine("Build merged successfully.");
+                    WriteColoredLine("Build merged successfully.", ConsoleColor.Green);
                     Console.WriteLine($"Progress: {progress.BuildIndex}/{builds.Count} build(s) completed.");
                     Console.WriteLine($"Checkpoint: {checkpointPath}");
                     Console.WriteLine($"Merged archive: {mergedDirectory}");
                 }
 
-                Console.WriteLine($"All {builds.Count} builds have been processed.");
+                WriteColoredLine($"All {builds.Count} builds have been processed.", ConsoleColor.Green);
                 Console.ReadKey();
                 return 0;
             }
@@ -203,7 +203,16 @@ namespace Valve_Diff_Tool
                     Console.Error.WriteLine($"Could not write error log: {loggingException}");
                 }
 
-                Console.Error.WriteLine($"ERROR: {exception}");
+                ConsoleColor previousColor = Console.ForegroundColor;
+                try
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.Error.WriteLine($"ERROR: {exception}");
+                }
+                finally
+                {
+                    Console.ForegroundColor = previousColor;
+                }
                 Console.Error.WriteLine($"Error log: {logPath}");
                 return 1;
             }
@@ -286,6 +295,20 @@ namespace Valve_Diff_Tool
 
             return normalizedCandidate.Equals(normalizedParent, comparison) ||
                    normalizedCandidate.StartsWith(normalizedParent + Path.DirectorySeparatorChar, comparison);
+        }
+
+        private static void WriteColoredLine(string message, ConsoleColor color)
+        {
+            ConsoleColor previousColor = Console.ForegroundColor;
+            try
+            {
+                Console.ForegroundColor = color;
+                Console.WriteLine(message);
+            }
+            finally
+            {
+                Console.ForegroundColor = previousColor;
+            }
         }
 
         private sealed class ProgressState

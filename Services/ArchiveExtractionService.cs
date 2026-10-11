@@ -78,7 +78,7 @@ public sealed class ArchiveExtractionService
 
             try
             {
-                Console.WriteLine($"[{i + 1}/{archivesToExtract.Count}] Extracting {Path.GetFileName(archive)}");
+                WriteColoredLine($"[{i + 1}/{archivesToExtract.Count}] Extracting {Path.GetFileName(archive)}", ConsoleColor.Cyan);
 
                 var startInfo = new ProcessStartInfo
                 {
@@ -147,7 +147,7 @@ public sealed class ArchiveExtractionService
             }
         }
 
-        Console.WriteLine($"Extracted {archivesToExtract.Count} VPK archive(s).");
+        WriteColoredLine($"Extracted {archivesToExtract.Count} VPK archive(s).", ConsoleColor.Green);
     }
 
     private static bool TryGetChunkBaseName(string path, out string baseName)
@@ -200,8 +200,31 @@ public sealed class ArchiveExtractionService
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                Console.Error.WriteLine($"WARNING: Could not remove temporary staging directory '{directory}': {exception.Message}");
+                ConsoleColor previousColor = Console.ForegroundColor;
+                try
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.Error.WriteLine($"WARNING: Could not remove temporary staging directory '{directory}': {exception.Message}");
+                }
+                finally
+                {
+                    Console.ForegroundColor = previousColor;
+                }
                 return;
             }
+    }
+
+    private static void WriteColoredLine(string message, ConsoleColor color)
+    {
+        ConsoleColor previousColor = Console.ForegroundColor;
+        try
+        {
+            Console.ForegroundColor = color;
+            Console.WriteLine(message);
+        }
+        finally
+        {
+            Console.ForegroundColor = previousColor;
+        }
     }
 }
