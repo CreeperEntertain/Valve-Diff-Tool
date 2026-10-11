@@ -73,7 +73,7 @@ public sealed class ArchiveExtractionService
                 throw new InvalidOperationException($"Archive destination escapes TEMP: {archive}");
 
             Directory.CreateDirectory(destination);
-            string stagingDirectory = Path.Combine(destination, $".vpkedit-stage-{Guid.NewGuid():N}");
+            string stagingDirectory = Path.Combine(Path.GetTempPath(), $"ValveDiffTool-vpkedit-{Guid.NewGuid():N}");
             Directory.CreateDirectory(stagingDirectory);
 
             try
@@ -143,8 +143,7 @@ public sealed class ArchiveExtractionService
             }
             finally
             {
-                if (Directory.Exists(stagingDirectory))
-                    Directory.Delete(stagingDirectory, recursive: true);
+                await TryDeleteStagingDirectoryAsync(stagingDirectory);
             }
         }
 
@@ -180,6 +179,35 @@ public sealed class ArchiveExtractionService
         {
             await destination.WriteAsync(buffer, 0, count);
             await destination.FlushAsync();
+        }
+    }
+
+    private static async Task TryDeleteStagingDirectoryAsync(
+    string directory)
+    {
+        const int maxAttempts = 5;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                await Task.Delay(200 * attempt);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+            {
+                await Task.Delay(200 * attempt);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"WARNING: Could not remove temporary staging directory '{directory}': {exception.Message}");
+                return;
+            }
         }
     }
 }
