@@ -54,6 +54,7 @@ namespace Valve_Diff_Tool
                 if (builds.Count == 0)
                 {
                     WriteColoredLine("No build directories found.", ConsoleColor.Yellow);
+                    Console.ReadKey();
                     return 1;
                 }
 
@@ -103,6 +104,7 @@ namespace Valve_Diff_Tool
 
                     Console.WriteLine($"All {builds.Count} builds have been processed.");
                     Console.WriteLine($"Checkpoint: {checkpointPath}");
+                    Console.ReadKey();
                     return 0;
                 }
 
@@ -214,6 +216,7 @@ namespace Valve_Diff_Tool
                     Console.ForegroundColor = previousColor;
                 }
                 Console.Error.WriteLine($"Error log: {logPath}");
+                Console.ReadKey();
                 return 1;
             }
         }
