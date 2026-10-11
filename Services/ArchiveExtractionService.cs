@@ -150,8 +150,7 @@ public sealed class ArchiveExtractionService
         Console.WriteLine($"Extracted {archivesToExtract.Count} VPK archive(s).");
     }
 
-    private static bool TryGetChunkBaseName(
-        string path, out string baseName)
+    private static bool TryGetChunkBaseName(string path, out string baseName)
     {
         string name = Path.GetFileNameWithoutExtension(path);
         int separator = name.LastIndexOf('_');
@@ -168,9 +167,7 @@ public sealed class ArchiveExtractionService
         return false;
     }
 
-    private static async Task ForwardOutputAsync(
-    StreamReader reader,
-    TextWriter destination)
+    private static async Task ForwardOutputAsync(StreamReader reader, TextWriter destination)
     {
         char[] buffer = new char[1024];
         int count;
