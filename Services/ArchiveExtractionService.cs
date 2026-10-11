@@ -182,8 +182,7 @@ public sealed class ArchiveExtractionService
         }
     }
 
-    private static async Task TryDeleteStagingDirectoryAsync(
-    string directory)
+    private static async Task TryDeleteStagingDirectoryAsync(string directory)
     {
         const int maxAttempts = 5;
 
