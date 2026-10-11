@@ -9,20 +9,52 @@
             _hashService = hashService;
         }
 
-        public void MergeDirectory(string source, string destination)
+        public void MergeDirectory(
+            string source,
+            string destination,
+            ISet<string>? completedFiles = null,
+            Action<string>? onFileMerged = null)
         {
-            Directory.CreateDirectory(destination);
+            string sourceRoot = Path.GetFullPath(source);
+            string destinationRoot = Path.GetFullPath(destination);
+            Directory.CreateDirectory(destinationRoot);
 
-            foreach (string sourceDirectory in Directory.GetDirectories(source))
+            MergeDirectoryCore(
+                sourceRoot,
+                destinationRoot,
+                sourceRoot,
+                completedFiles,
+                onFileMerged);
+        }
+
+        private void MergeDirectoryCore(
+            string source,
+            string destination,
+            string sourceRoot,
+            ISet<string>? completedFiles,
+            Action<string>? onFileMerged)
+        {
+            foreach (string sourceDirectory in Directory.GetDirectories(source).OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
             {
                 string targetDirectory = Path.Combine(destination, Path.GetFileName(sourceDirectory));
                 if (File.Exists(targetDirectory))
                     throw new IOException($"Cannot merge directory into existing file: {targetDirectory}");
-                MergeDirectory(sourceDirectory, targetDirectory);
+
+                Directory.CreateDirectory(targetDirectory);
+                MergeDirectoryCore(
+                    sourceDirectory,
+                    targetDirectory,
+                    sourceRoot,
+                    completedFiles,
+                    onFileMerged);
             }
 
-            foreach (string sourceFile in Directory.GetFiles(source))
+            foreach (string sourceFile in Directory.GetFiles(source).OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
             {
+                string relativePath = Path.GetRelativePath(sourceRoot, sourceFile);
+                if (completedFiles is not null && completedFiles.Contains(relativePath))
+                    continue;
+
                 string destinationFile = Path.Combine(destination, Path.GetFileName(sourceFile));
                 try
                 {
@@ -32,11 +64,15 @@
                 {
                     throw new IOException(
                         $"Failed to merge file.{Environment.NewLine}" +
-                        $"Source:      {sourceFile}{Environment.NewLine}" +
-                        $"Destination: {destinationFile}{Environment.NewLine}" +
-                        $"Reason:      {exception.Message}",
+                        $"Relative path: {relativePath}{Environment.NewLine}" +
+                        $"Source:        {sourceFile}{Environment.NewLine}" +
+                        $"Destination:   {destinationFile}{Environment.NewLine}" +
+                        $"Reason:        {exception.Message}",
                         exception);
                 }
+
+                onFileMerged?.Invoke(relativePath);
+                completedFiles?.Add(relativePath);
             }
         }
 
@@ -48,16 +84,19 @@
 
             if (Directory.Exists(destinationFile))
                 throw new IOException($"File conflicts with an existing directory: {destinationFile}");
+
             if (Directory.Exists(versionDirectory) && HasVersionFiles(versionDirectory, Path.GetExtension(destinationFile)))
             {
                 AddToExistingVersions(sourceFile, versionDirectory);
                 return;
             }
+
             if (!File.Exists(destinationFile))
             {
                 File.Copy(sourceFile, destinationFile);
                 return;
             }
+
             if (_hashService.AreIdentical(sourceFile, destinationFile))
                 return;
 
@@ -65,11 +104,14 @@
             Directory.CreateDirectory(versionDirectory);
             string oldVersion = Path.Combine(versionDirectory, $"0{extension}");
             File.Move(destinationFile, oldVersion);
-            int highestVersion = 0;
 
+            int highestVersion = 0;
             foreach (string file in Directory.GetFiles(versionDirectory))
-                if (Path.GetExtension(file).Equals(extension, StringComparison.OrdinalIgnoreCase) && int.TryParse(Path.GetFileNameWithoutExtension(file), out int number))
+            {
+                if (Path.GetExtension(file).Equals(extension, StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(Path.GetFileNameWithoutExtension(file), out int number))
                     highestVersion = Math.Max(highestVersion, number);
+            }
 
             string newVersion = Path.Combine(versionDirectory, $"{highestVersion + 1}{extension}");
             File.Copy(sourceFile, newVersion);
@@ -78,10 +120,12 @@
         private static bool HasVersionFiles(string versionDirectory, string extension)
         {
             return
-                Directory.GetFiles(versionDirectory)
-                    .Any(file => Path.GetExtension(file)
-                    .Equals(extension, StringComparison.OrdinalIgnoreCase) &&
-                int.TryParse(Path.GetFileNameWithoutExtension(file), out _));
+                Directory
+                    .GetFiles(versionDirectory)
+                    .Any(file => Path
+                        .GetExtension(file)
+                        .Equals(extension, StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(Path.GetFileNameWithoutExtension(file), out _));
         }
 
         private void AddToExistingVersions(string sourceFile, string versionDirectory)
@@ -96,8 +140,8 @@
                     Extension = Path.GetExtension(path)
                 })
                 .Where(file =>
-                    file.Extension.Equals(extension, StringComparison.OrdinalIgnoreCase)
-                    && int.TryParse(file.Name, out _))
+                    file.Extension.Equals(extension, StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(file.Name, out _))
                 .Select(file => new
                 {
                     file.Path,
@@ -106,22 +150,17 @@
                 .OrderByDescending(file => file.Number)
                 .ToList();
 
-            if (versions.Count > 0)
-            {
-                string highestVersion = versions[0].Path;
-                if (_hashService.AreIdentical(sourceFile, highestVersion))
+            if (versions.Count == 0)
+                throw new IOException(
+                    $"No numbered versions found in '{versionDirectory}'. Cannot safely merge the incoming file.");
+
+            foreach (var version in versions)
+                if (_hashService.AreIdentical(sourceFile, version.Path))
                     return;
 
-                int nextNumber = versions[0].Number + 1;
-                string nextVersion = Path.Combine(versionDirectory, $"{nextNumber}{extension}");
-
-                File.Copy(sourceFile, nextVersion);
-                return;
-            }
-
-            throw new IOException(
-                $"No numbered versions found in '{versionDirectory}'. " +
-                "Cannot safely merge the incoming file.");
+            int nextNumber = versions[0].Number + 1;
+            string nextVersion = Path.Combine(versionDirectory, $"{nextNumber}{extension}");
+            File.Copy(sourceFile, nextVersion);
         }
     }
 }

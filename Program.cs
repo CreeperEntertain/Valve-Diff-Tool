@@ -1,10 +1,20 @@
-﻿using PortalBuildMerger.Services;
+﻿using System.Text;
+using System.Text.Json;
+using PortalBuildMerger.Services;
 using Valve_Diff_Tool.Services;
 
 namespace Valve_Diff_Tool
 {
     internal static class Program
     {
+        private const string PrepareStage = "Prepare";
+        private const string MergeStage = "Merge";
+
+        private static readonly JsonSerializerOptions JsonOptions = new()
+        {
+            WriteIndented = true
+        };
+
         private static async Task<int> Main(string[] args)
         {
             try
@@ -25,16 +35,15 @@ namespace Valve_Diff_Tool
 
                 if (!Directory.Exists(inputDirectory))
                     throw new DirectoryNotFoundException(inputDirectory);
-                if (string.IsNullOrWhiteSpace(outputDirectory))
-                    throw new ArgumentException("Output directory is required.");
                 if (!File.Exists(vpkEditCliPath))
                     throw new FileNotFoundException("VPKEdit CLI executable not found.", vpkEditCliPath);
+                if (IsSameOrNestedPath(outputDirectory, inputDirectory))
+                    throw new InvalidOperationException("The output directory must not be inside the input directory.");
 
                 string mergedDirectory = Path.Combine(outputDirectory, "MERGED");
                 string tempDirectory = Path.Combine(outputDirectory, "TEMP");
-
-                if (IsSameOrNestedPath(outputDirectory, inputDirectory))
-                    throw new InvalidOperationException("The output directory must not be inside the input directory.");
+                string checkpointPath = Path.Combine(outputDirectory, "progress.json");
+                string mergeJournalPath = Path.Combine(outputDirectory, "merge-progress.jsonl");
 
                 var discovery = new BuildDiscoveryService();
                 var directories = new DirectoryService();
@@ -42,43 +51,138 @@ namespace Valve_Diff_Tool
                 var merger = new MergeService(new HashService());
 
                 List<string> builds = discovery.DiscoverAndSort(inputDirectory);
-
                 if (builds.Count == 0)
                 {
                     Console.WriteLine("No build directories found.");
                     return 1;
                 }
 
-                string build = builds[0];
-
-                Console.WriteLine($"Found {builds.Count} builds.");
-                Console.WriteLine("TEST MODE: processing one build only.");
-                Console.WriteLine($"Selected: {Path.GetFileName(build)}");
-
                 Directory.CreateDirectory(mergedDirectory);
                 Directory.CreateDirectory(tempDirectory);
 
+                ProgressState progress;
+                if (File.Exists(checkpointPath))
+                {
+                    progress = JsonSerializer.Deserialize<ProgressState>(File.ReadAllText(checkpointPath), JsonOptions)
+                        ?? throw new InvalidDataException($"Checkpoint is empty or invalid: {checkpointPath}");
+
+                    if (!PathEquals(progress.InputDirectory, inputDirectory))
+                        throw new InvalidOperationException(
+                            $"The checkpoint belongs to a different input directory: {progress.InputDirectory}{Environment.NewLine}" +
+                            $"Current input directory: {inputDirectory}{Environment.NewLine}" +
+                            "Use the original input directory, or remove progress.json to start a new run.");
+                }
+                else
+                {
+                    progress = new ProgressState
+                    {
+                        InputDirectory = inputDirectory,
+                        BuildIndex = 0,
+                        ActiveBuildPath = builds[0],
+                        Stage = PrepareStage
+                    };
+
+                    if (Directory.GetFileSystemEntries(tempDirectory).Length > 0 && ConfirmResumeExistingTemp())
+                    {
+                        progress.Stage = MergeStage;
+                        File.WriteAllText(mergeJournalPath, string.Empty);
+                        Console.WriteLine("Existing TEMP will be merged into MERGED; it will not be cleared or re-extracted.");
+                    }
+
+                    SaveProgress(checkpointPath, progress);
+                }
+
+                if (progress.BuildIndex < 0 || progress.BuildIndex > builds.Count)
+                    throw new InvalidDataException($"Invalid build index {progress.BuildIndex} in {checkpointPath}");
+
+                if (progress.BuildIndex == builds.Count)
+                {
+                    directories.ClearDirectory(tempDirectory);
+                    if (File.Exists(mergeJournalPath))
+                        File.WriteAllText(mergeJournalPath, string.Empty);
+
+                    Console.WriteLine($"All {builds.Count} builds have been processed.");
+                    Console.WriteLine($"Checkpoint: {checkpointPath}");
+                    return 0;
+                }
+
+                string build = builds[progress.BuildIndex];
+                if (!PathEquals(progress.ActiveBuildPath, build))
+                {
+                    throw new InvalidOperationException(
+                        "The build order no longer matches progress.json. No data was cleared." + Environment.NewLine +
+                        $"Checkpoint build: {progress.ActiveBuildPath}{Environment.NewLine}" +
+                        $"Build at saved index {progress.BuildIndex}: {build}{Environment.NewLine}" +
+                        "Restore the original input set/order, or remove progress.json to start over.");
+                }
+
+                if (progress.Stage != PrepareStage && progress.Stage != MergeStage)
+                    throw new InvalidDataException($"Unknown checkpoint stage '{progress.Stage}' in {checkpointPath}");
+
+                Console.WriteLine($"Found {builds.Count} builds.");
+                Console.WriteLine($"Build {progress.BuildIndex + 1}/{builds.Count}: {Path.GetFileName(build)}");
+
+                if (progress.Stage == PrepareStage)
+                {
+                    directories.ClearDirectory(tempDirectory);
+                    File.WriteAllText(mergeJournalPath, string.Empty);
+
+                    Console.WriteLine("Copying build subdirectories...");
+                    directories.CopySubdirectories(build, tempDirectory);
+
+                    Console.WriteLine("Extracting VPK archives...");
+                    await extraction.ExtractVpkArchivesAsync(build, tempDirectory, vpkEditCliPath);
+
+                    progress.Stage = MergeStage;
+                    SaveProgress(checkpointPath, progress);
+                }
+                else
+                    Console.WriteLine("Resuming at MERGE stage. TEMP is being preserved.");
+
+                HashSet<string> completedFiles = LoadCompletedFiles(mergeJournalPath);
+                Console.WriteLine($"Resuming merge with {completedFiles.Count} file(s) already recorded as complete.");
+
+                using (var journalStream = new FileStream(
+                    mergeJournalPath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.Read))
+                using (var journalWriter = new StreamWriter(journalStream, new UTF8Encoding(false)))
+                {
+                    merger.MergeDirectory(
+                        tempDirectory,
+                        mergedDirectory,
+                        completedFiles,
+                        relativePath =>
+                        {
+                            journalWriter.WriteLine(JsonSerializer.Serialize(relativePath));
+                            journalWriter.Flush();
+                        });
+                }
+
+                progress.BuildIndex++;
+                progress.Stage = PrepareStage;
+                progress.ActiveBuildPath = progress.BuildIndex < builds.Count
+                    ? builds[progress.BuildIndex]
+                    : null;
+                SaveProgress(checkpointPath, progress);
+
                 directories.ClearDirectory(tempDirectory);
+                File.WriteAllText(mergeJournalPath, string.Empty);
 
-                Console.WriteLine("Copying build subdirectories...");
-                directories.CopySubdirectories(build, tempDirectory);
-
-                Console.WriteLine("Extracting VPK archives...");
-                await extraction.ExtractVpkArchivesAsync(build, tempDirectory, vpkEditCliPath);
-
-                Console.WriteLine("Merging files...");
-                merger.MergeDirectory(tempDirectory, mergedDirectory);
-
-                directories.ClearDirectory(tempDirectory);
-
-                Console.WriteLine("Test build merged successfully.");
+                Console.WriteLine("Build merged successfully.");
+                Console.WriteLine($"Progress: {progress.BuildIndex}/{builds.Count} build(s) completed.");
+                Console.WriteLine($"Checkpoint: {checkpointPath}");
                 Console.WriteLine($"Merged archive: {mergedDirectory}");
+                Console.WriteLine("TEST MODE: one build processed this run.");
 
                 return 0;
             }
             catch (Exception exception)
             {
-                string logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Valve-Diff-Tool");
+                string logDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Valve-Diff-Tool");
                 string logPath = Path.Combine(logDirectory, "error.log");
 
                 try
@@ -97,9 +201,54 @@ namespace Valve_Diff_Tool
 
                 Console.Error.WriteLine($"ERROR: {exception}");
                 Console.Error.WriteLine($"Error log: {logPath}");
-
                 return 1;
             }
+        }
+
+        private static HashSet<string> LoadCompletedFiles(string journalPath)
+        {
+            StringComparer comparer = OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+            var completed = new HashSet<string>(comparer);
+
+            if (!File.Exists(journalPath))
+                return completed;
+
+            foreach (string line in File.ReadLines(journalPath))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                try
+                {
+                    string? relativePath = JsonSerializer.Deserialize<string>(line);
+                    if (!string.IsNullOrWhiteSpace(relativePath))
+                        completed.Add(relativePath);
+                }
+                catch (JsonException)
+                {
+                    // Ignore a malformed/partial final journal line. We retire that shit.
+                }
+            }
+
+            return completed;
+        }
+
+        private static void SaveProgress(string checkpointPath, ProgressState progress)
+        {
+            string temporaryPath = checkpointPath + ".tmp";
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(progress, JsonOptions));
+            File.Move(temporaryPath, checkpointPath, overwrite: true);
+        }
+
+        private static bool ConfirmResumeExistingTemp()
+        {
+            Console.Write("TEMP already contains files but progress.json is missing. Resume merging TEMP? [Y/n]: ");
+            string? answer = Console.ReadLine();
+            return string.IsNullOrWhiteSpace(answer)
+                || answer.Trim().Equals("y", StringComparison.OrdinalIgnoreCase)
+                || answer.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string AskForPath(string prompt)
@@ -107,18 +256,42 @@ namespace Valve_Diff_Tool
             Console.Write($"{prompt}: ");
             string? value = Console.ReadLine();
             if (string.IsNullOrWhiteSpace(value))
-                throw new ArgumentException($"{prompt} cannor be empty.");
+                throw new ArgumentException($"{prompt} cannot be empty.");
             return value.Trim().Trim('"');
+        }
+
+        private static bool PathEquals(string? left, string right)
+        {
+            if (string.IsNullOrWhiteSpace(left))
+                return false;
+
+            StringComparison comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            return Path.GetFullPath(left).Equals(Path.GetFullPath(right), comparison);
         }
 
         private static bool IsSameOrNestedPath(string candidate, string parent)
         {
             string normalizedCandidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidate));
             string normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parent));
+            StringComparison comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
 
-            return
-                normalizedCandidate.Equals(normalizedParent, StringComparison.OrdinalIgnoreCase) ||
-                normalizedCandidate.StartsWith(normalizedParent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            return normalizedCandidate.Equals(normalizedParent, comparison) ||
+                   normalizedCandidate.StartsWith(normalizedParent + Path.DirectorySeparatorChar, comparison);
+        }
+
+        private sealed class ProgressState
+        {
+            public ProgressState() { }
+
+            public string InputDirectory { get; set; } = string.Empty;
+            public int BuildIndex { get; set; }
+            public string? ActiveBuildPath { get; set; }
+            public string Stage { get; set; } = PrepareStage;
         }
     }
 }
