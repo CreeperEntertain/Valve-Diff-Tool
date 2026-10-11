@@ -8,9 +8,9 @@ namespace Valve_Diff_Tool.Utilities
         public static BuildArchive Parse(string directoryPath)
         {
             string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directoryPath));
-            string[] parts = name.Split(' ', 6, StringSplitOptions.RemoveEmptyEntries);
+            string[] parts = name.Split(' ', 5, StringSplitOptions.RemoveEmptyEntries);
 
-            if (parts.Length != 6)
+            if (parts.Length != 5)
                 throw new FormatException($"Invalid build folder name: {name}");
             if (!int.TryParse(parts[0], out int depotId))
                 throw new FormatException($"Invalid depot ID: {parts[0]}");
