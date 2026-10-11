@@ -78,7 +78,7 @@ namespace Valve_Diff_Tool
             }
             catch (Exception exception)
             {
-                Console.Error.WriteLine($"ERROR: {exception.Message}");
+                Console.Error.WriteLine($"ERROR: {exception}");
                 return 1;
             }
         }
