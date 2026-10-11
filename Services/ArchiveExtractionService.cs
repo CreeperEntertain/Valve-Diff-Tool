@@ -66,9 +66,7 @@ public sealed class ArchiveExtractionService
             string destination = Path.GetFullPath(Path.Combine(tempDirectory, relativeParent));
             string tempRoot = Path.TrimEndingDirectorySeparator(tempDirectory) + Path.DirectorySeparatorChar;
 
-            if (!destination.StartsWith(tempRoot, comparison)
-                && !destination.Equals(
-                    tempDirectory, comparison))
+            if (!destination.StartsWith(tempRoot, comparison) && !destination.Equals(tempDirectory, comparison))
                 throw new InvalidOperationException($"Archive destination escapes TEMP: {archive}");
 
             Directory.CreateDirectory(destination);
