@@ -85,9 +85,9 @@ public sealed class ArchiveExtractionService
                     FileName = vpkEditCliPath,
                     WorkingDirectory = stagingDirectory,
                     UseShellExecute = false,
-                    RedirectStandardOutput = false,
-                    RedirectStandardError = false,
-                    CreateNoWindow = false
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
                 };
 
                 startInfo.ArgumentList.Add(archive);
@@ -100,6 +100,9 @@ public sealed class ArchiveExtractionService
 
                 if (!process.Start())
                     throw new InvalidOperationException($"Failed to start VPKEdit for {archive}");
+
+                Task stdoutTask = ForwardOutputAsync(process.StandardOutput, Console.Out);
+                Task stderrTask = ForwardOutputAsync(process.StandardError, Console.Error);
 
                 try
                 {
@@ -121,6 +124,8 @@ public sealed class ArchiveExtractionService
 
                     throw;
                 }
+
+                await Task.WhenAll(stdoutTask, stderrTask);
 
                 if (process.ExitCode != 0)
                     throw new InvalidOperationException($"VPKEdit failed on '{archive}' with exit code {process.ExitCode}.");
@@ -162,5 +167,19 @@ public sealed class ArchiveExtractionService
 
         baseName = string.Empty;
         return false;
+    }
+
+    private static async Task ForwardOutputAsync(
+    StreamReader reader,
+    TextWriter destination)
+    {
+        char[] buffer = new char[1024];
+        int count;
+
+        while ((count = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        {
+            await destination.WriteAsync(buffer, 0, count);
+            await destination.FlushAsync();
+        }
     }
 }
