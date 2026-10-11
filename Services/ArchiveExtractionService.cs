@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Valve_Diff_Tool.Services;
 
 namespace PortalBuildMerger.Services;
 
@@ -57,6 +58,8 @@ public sealed class ArchiveExtractionService
             .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        var extractionMerger = new MergeService(new HashService());
+
         for (int i = 0; i < archivesToExtract.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -70,34 +73,74 @@ public sealed class ArchiveExtractionService
                 throw new InvalidOperationException($"Archive destination escapes TEMP: {archive}");
 
             Directory.CreateDirectory(destination);
+            string stagingDirectory = Path.Combine(destination, $".vpkedit-stage-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(stagingDirectory);
 
-            Console.WriteLine($"[{i + 1}/{archivesToExtract.Count}] Extracting {Path.GetFileName(archive)}");
-
-            var startInfo = new ProcessStartInfo
+            try
             {
-                FileName = vpkEditCliPath,
-                WorkingDirectory = destination,
-                UseShellExecute = false,
-                RedirectStandardOutput = false,
-                RedirectStandardError = false,
-                CreateNoWindow = false
-            };
+                Console.WriteLine($"[{i + 1}/{archivesToExtract.Count}] Extracting {Path.GetFileName(archive)}");
 
-            startInfo.ArgumentList.Add(archive);
-            startInfo.ArgumentList.Add("--extract");
-            startInfo.ArgumentList.Add("/");
-            startInfo.ArgumentList.Add("--output");
-            startInfo.ArgumentList.Add(destination);
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = vpkEditCliPath,
+                    WorkingDirectory = stagingDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = false,
+                    RedirectStandardError = false,
+                    CreateNoWindow = false
+                };
 
-            using Process process = new() { StartInfo = startInfo };
+                startInfo.ArgumentList.Add(archive);
+                startInfo.ArgumentList.Add("--extract");
+                startInfo.ArgumentList.Add("/");
+                startInfo.ArgumentList.Add("--output");
+                startInfo.ArgumentList.Add(stagingDirectory);
 
-            if (!process.Start())
-                throw new InvalidOperationException($"Failed to start VPKEdit for {archive}");
+                using Process process = new() { StartInfo = startInfo };
 
-            await process.WaitForExitAsync(cancellationToken);
+                if (!process.Start())
+                    throw new InvalidOperationException($"Failed to start VPKEdit for {archive}");
 
-            if (process.ExitCode != 0)
-                throw new InvalidOperationException($"VPKEdit failed on '{archive}' with exit code {process.ExitCode}.");
+                try
+                {
+                    await process.WaitForExitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    try
+                    {
+                        if (!process.HasExited)
+                            process.Kill(entireProcessTree: true);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                    catch (System.ComponentModel.Win32Exception)
+                    {
+                    }
+
+                    throw;
+                }
+
+                if (process.ExitCode != 0)
+                    throw new InvalidOperationException($"VPKEdit failed on '{archive}' with exit code {process.ExitCode}.");
+
+                string[] stagedDirectories = Directory.GetDirectories(stagingDirectory);
+                string[] stagedFiles = Directory.GetFiles(stagingDirectory);
+
+                if (stagedDirectories.Length != 1 || stagedFiles.Length != 0)
+                    throw new InvalidOperationException(
+                        $"Unexpected extraction layout for '{archive}'. " +
+                        $"Found {stagedDirectories.Length} directories and " +
+                        $"{stagedFiles.Length} files in staging.");
+
+                extractionMerger.MergeDirectory(stagedDirectories[0], destination);
+            }
+            finally
+            {
+                if (Directory.Exists(stagingDirectory))
+                    Directory.Delete(stagingDirectory, recursive: true);
+            }
         }
 
         Console.WriteLine($"Extracted {archivesToExtract.Count} VPK archive(s).");
