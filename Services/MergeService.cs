@@ -22,7 +22,22 @@
             }
 
             foreach (string sourceFile in Directory.GetFiles(source))
-                MergeFile(sourceFile, Path.Combine(destination, Path.GetFileName(sourceFile)));
+            {
+                string destinationFile = Path.Combine(destination, Path.GetFileName(sourceFile));
+                try
+                {
+                    MergeFile(sourceFile, destinationFile);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    throw new IOException(
+                        $"Failed to merge file.{Environment.NewLine}" +
+                        $"Source:      {sourceFile}{Environment.NewLine}" +
+                        $"Destination: {destinationFile}{Environment.NewLine}" +
+                        $"Reason:      {exception.Message}",
+                        exception);
+                }
+            }
         }
 
         private void MergeFile(string sourceFile, string destinationFile)
