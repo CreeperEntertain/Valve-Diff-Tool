@@ -78,7 +78,26 @@ namespace Valve_Diff_Tool
             }
             catch (Exception exception)
             {
+                string logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Valve-Diff-Tool");
+                string logPath = Path.Combine(logDirectory, "error.log");
+
+                try
+                {
+                    Directory.CreateDirectory(logDirectory);
+                    File.AppendAllText(
+                        logPath,
+                        $"[{DateTimeOffset.Now:O}]{Environment.NewLine}" +
+                        $"{exception}{Environment.NewLine}" +
+                        $"{new string('-', 80)}{Environment.NewLine}");
+                }
+                catch (Exception loggingException)
+                {
+                    Console.Error.WriteLine($"Could not write error log: {loggingException}");
+                }
+
                 Console.Error.WriteLine($"ERROR: {exception}");
+                Console.Error.WriteLine($"Error log: {logPath}");
+
                 return 1;
             }
         }
