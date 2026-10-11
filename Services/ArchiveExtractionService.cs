@@ -188,7 +188,6 @@ public sealed class ArchiveExtractionService
         const int maxAttempts = 5;
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
-        {
             try
             {
                 if (Directory.Exists(directory))
@@ -208,6 +207,5 @@ public sealed class ArchiveExtractionService
                 Console.Error.WriteLine($"WARNING: Could not remove temporary staging directory '{directory}': {exception.Message}");
                 return;
             }
-        }
     }
 }
