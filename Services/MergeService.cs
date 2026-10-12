@@ -80,13 +80,29 @@
         {
             string parent = Path.GetDirectoryName(destinationFile)!;
             Directory.CreateDirectory(parent);
-            string versionDirectory = Path.Combine(parent, Path.GetFileNameWithoutExtension(destinationFile));
 
-            if (Directory.Exists(destinationFile))
-                throw new IOException($"File conflicts with an existing directory: {destinationFile}");
+            string extension = Path.GetExtension(destinationFile);
+            string versionDirectory = destinationFile;
+            string legacyVersionDirectory = Path.Combine(
+                parent,
+                Path.GetFileNameWithoutExtension(destinationFile));
 
-            if (Directory.Exists(versionDirectory) && HasVersionFiles(versionDirectory, Path.GetExtension(destinationFile)))
+            if (Directory.Exists(versionDirectory))
             {
+                if (HasVersionFiles(versionDirectory, extension))
+                {
+                    AddToExistingVersions(sourceFile, versionDirectory);
+                    return;
+                }
+                throw new IOException($"File conflicts with an existing directory: {destinationFile}");
+            }
+
+            if (Directory.Exists(legacyVersionDirectory) && HasVersionFiles(legacyVersionDirectory, extension))
+            {
+                if (File.Exists(destinationFile))
+                    throw new IOException($"Both the legacy version directory '{legacyVersionDirectory}' and the file '{destinationFile}' exist. Resolve this conflict manually.");
+
+                Directory.Move(legacyVersionDirectory, versionDirectory);
                 AddToExistingVersions(sourceFile, versionDirectory);
                 return;
             }
@@ -100,10 +116,26 @@
             if (_hashService.AreIdentical(sourceFile, destinationFile))
                 return;
 
-            string extension = Path.GetExtension(destinationFile);
-            Directory.CreateDirectory(versionDirectory);
-            string oldVersion = Path.Combine(versionDirectory, $"0{extension}");
-            File.Move(destinationFile, oldVersion);
+            string temporaryOriginal = Path.Combine(parent, $".{Path.GetFileName(destinationFile)}.{Guid.NewGuid():N}.tmp");
+
+            File.Move(destinationFile, temporaryOriginal);
+
+            try
+            {
+                Directory.CreateDirectory(versionDirectory);
+                File.Move(temporaryOriginal, Path.Combine(versionDirectory, $"0{extension}"));
+            }
+            catch
+            {
+                if (File.Exists(temporaryOriginal))
+                {
+                    if (Directory.Exists(versionDirectory) && Directory.GetFileSystemEntries(versionDirectory).Length == 0)
+                        Directory.Delete(versionDirectory);
+                    if (!Directory.Exists(versionDirectory) && !File.Exists(destinationFile))
+                        File.Move(temporaryOriginal, destinationFile);
+                }
+                throw;
+            }
 
             int highestVersion = 0;
             foreach (string file in Directory.GetFiles(versionDirectory))
