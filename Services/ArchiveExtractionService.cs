@@ -60,6 +60,9 @@ public sealed class ArchiveExtractionService
 
         var extractionMerger = new MergeService(new HashService());
 
+        int processedArchives = 0;
+        int warningCount = 0;
+
         for (int i = 0; i < archivesToExtract.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -128,18 +131,42 @@ public sealed class ArchiveExtractionService
                 await Task.WhenAll(stdoutTask, stderrTask);
 
                 if (process.ExitCode != 0)
-                    throw new InvalidOperationException($"VPKEdit failed on '{archive}' with exit code {process.ExitCode}.");
+                {
+                    warningCount++;
+                    WriteColoredLine(
+                        $"Warning: VPKEdit failed on '{Path.GetFileName(archive)}' " +
+                        $"with exit code {process.ExitCode}. " +
+                        "Attempting to keep successfully extracted files.",
+                        ConsoleColor.Yellow);
+                }
 
                 string[] stagedDirectories = Directory.GetDirectories(stagingDirectory);
                 string[] stagedFiles = Directory.GetFiles(stagingDirectory);
-
-                if (stagedDirectories.Length != 1 || stagedFiles.Length != 0)
-                    throw new InvalidOperationException(
-                        $"Unexpected extraction layout for '{archive}'. " +
-                        $"Found {stagedDirectories.Length} directories and " +
-                        $"{stagedFiles.Length} files in staging.");
+                string extractionRoot;
+                if (stagedDirectories.Length != 1 || stagedFiles.Length == 0)
+                    extractionRoot = stagedDirectories[0];
+                else
+                {
+                    warningCount++;
+                    WriteColoredLine(
+                        $"WARNING: Unexpected extraction layout for " +
+                        $"'{Path.GetFileName(archive)}'. Attempting to preserve " +
+                        "all staged output, including its current folder structure.",
+                        ConsoleColor.Yellow);
+                    extractionRoot = stagingDirectory;
+                }
+                if (Directory.GetFileSystemEntries(extractionRoot).Length == 0)
+                {
+                    warningCount++;
+                    WriteColoredLine(
+                        $"WARNING: No extracted files to preserve for " +
+                        $"'{Path.GetFileName(archive)}'. Continuing.",
+                        ConsoleColor.Yellow);
+                    continue;
+                }
 
                 extractionMerger.MergeDirectory(stagedDirectories[0], destination);
+                processedArchives++;
             }
             finally
             {
@@ -147,7 +174,10 @@ public sealed class ArchiveExtractionService
             }
         }
 
-        WriteColoredLine($"Extracted {archivesToExtract.Count} VPK archive(s).", ConsoleColor.Green);
+        WriteColoredLine(
+            $"Processed {processedArchives}/{archivesToExtract.Count} archive output(s); " +
+            $"{warningCount} warning(s).",
+            warningCount == 0 ? ConsoleColor.Green : ConsoleColor.Yellow);
     }
 
     private static bool TryGetChunkBaseName(string path, out string baseName)
