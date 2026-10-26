@@ -20,14 +20,20 @@ internal static class Program
     {
         try
         {
-            string inputDirectory = args.Length > 0
-                ? args[0]
+            bool postHocMode = args.Any(arg => arg.Equals("--post", StringComparison.OrdinalIgnoreCase));
+            string[] positionalArgs = args
+                .Where(arg => !arg.Equals(
+                    "--post",
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            string inputDirectory = positionalArgs.Length > 0
+                ? positionalArgs[0]
                 : AskForPath("Input build archive directory");
-            string outputDirectory = args.Length > 1
-                ? args[1]
+            string outputDirectory = positionalArgs.Length > 1
+                ? positionalArgs[1]
                 : AskForPath("Output directory");
-            string vpkEditCliPath = args.Length > 2
-                ? args[2]
+            string vpkEditCliPath = positionalArgs.Length > 2
+                ? positionalArgs[2]
                 : AskForPath("Path to vpkeditcli.exe");
 
             inputDirectory = Path.GetFullPath(inputDirectory);
@@ -67,6 +73,29 @@ internal static class Program
 
             Directory.CreateDirectory(mergedDirectory);
             Directory.CreateDirectory(tempDirectory);
+
+            if (postHocMode)
+            {
+                WriteColoredLine( "--post specified. Starting post-hoc metadata reconstruction.", ConsoleColor.Yellow);
+                var replay = new MetadataReplayService();
+                await replay.RebuildAsync(inputDirectory, mergedDirectory, vpkEditCliPath);
+                WriteColoredLine("Post-hoc metadata reconstruction completed successfully.", ConsoleColor.Green);
+                Console.ReadKey();
+                return 0;
+            }
+            if (!File.Exists(checkpointPath) &&Directory.EnumerateFileSystemEntries(mergedDirectory).Any())
+            {
+                if (ConfirmPostHocReplay())
+                {
+                    WriteColoredLine("Switching to post-hoc metadata reconstruction.", ConsoleColor.Yellow);
+                    var replay = new MetadataReplayService();
+                    await replay.RebuildAsync(inputDirectory, mergedDirectory, vpkEditCliPath);
+                    WriteColoredLine("Post-hoc metadata reconstruction completed successfully.", ConsoleColor.Green);
+                    Console.ReadKey();
+                    return 0;
+                }
+                WriteColoredLine("Continuing with the normal startup and save-state initialization.", ConsoleColor.Yellow);
+            }
 
             ProgressState progress;
             if (File.Exists(checkpointPath))
@@ -296,6 +325,19 @@ internal static class Program
         string temporaryPath = checkpointPath + ".tmp";
         File.WriteAllText(temporaryPath, JsonSerializer.Serialize(progress, JsonOptions));
         File.Move(temporaryPath, checkpointPath, overwrite: true);
+    }
+
+    private static bool ConfirmPostHocReplay()
+    {
+        Console.WriteLine();
+        WriteColoredLine("progress.json is missing, but MERGED already contains files.", ConsoleColor.Yellow);
+        Console.WriteLine("Would you like to switch to post-hoc metadata reconstruction?");
+        Console.Write("Replay the original builds virtually? [y/N]: ");
+
+        string? answer = Console.ReadLine();
+        return
+            answer?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true ||
+            answer?.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static bool ConfirmResumeExistingTemp()
