@@ -67,10 +67,10 @@ internal sealed class MetadataArchive
     }
 
     public void RecordIncoming(
-    string relativePath,
-    string sourceFilePath,
-    DateTime buildTimestamp,
-    string buildName)
+        string relativePath,
+        string sourceFilePath,
+        DateTime buildTimestamp,
+        string buildName)
     {
         string normalizedPath = NormalizeRelativePath(relativePath);
         string parentPath = GetParentPath(normalizedPath);
@@ -164,10 +164,10 @@ internal sealed class MetadataArchive
     }
 
     private void TrackDirectoryCore(
-        string currentDirectory,
-        string sourceRoot,
-        DateTime buildTimestamp,
-        string buildName)
+    string currentDirectory,
+    string sourceRoot,
+    DateTime buildTimestamp,
+    string buildName)
     {
         foreach (string sourceDirectory in Directory
                      .GetDirectories(currentDirectory)
@@ -175,42 +175,20 @@ internal sealed class MetadataArchive
                          path => Path.GetFileName(path),
                          StringComparer.OrdinalIgnoreCase))
         {
-            string directoryName = Path.GetFileName(sourceDirectory);
-            string extension = Path.GetExtension(directoryName);
-            var numberedFiles = GetNumberedVersionFiles(sourceDirectory, extension);
-            bool isVersionDirectory = numberedFiles.Count > 0 && Directory.GetDirectories(sourceDirectory).Length == 0;
-            if (isVersionDirectory)
-            {
-                string logicalPath = NormalizeRelativePath(Path.GetRelativePath(sourceRoot, sourceDirectory));
-                bool existedBeforeThisDirectory = _files.ContainsKey(logicalPath);
-                foreach (var numberedFile in numberedFiles)
-                {
-                    RecordHash(
-                        logicalPath,
-                        _hashService.ComputeHash(numberedFile.Path),
-                        buildTimestamp,
-                        buildName,
-                        existedBeforeThisDirectory
-                            ? null
-                            : numberedFile.Version);
-                }
-                continue;
-            }
-
-            TrackDirectoryCore(sourceDirectory, sourceRoot, buildTimestamp, buildName);
+            TrackDirectoryCore(
+                sourceDirectory,
+                sourceRoot,
+                buildTimestamp,
+                buildName);
         }
-
         foreach (string sourceFile in Directory
                      .GetFiles(currentDirectory)
-                     .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(
+                         path => Path.GetFileName(path),
+                         StringComparer.OrdinalIgnoreCase))
         {
-            string filename = Path.GetFileName(sourceFile);
-            if (filename.Equals(MetadataFileName, StringComparison.OrdinalIgnoreCase))
-                continue;
-
             string relativePath = NormalizeRelativePath(Path.GetRelativePath(sourceRoot, sourceFile));
-
-            RecordHash(relativePath, _hashService.ComputeHash(sourceFile), buildTimestamp, buildName);
+            RecordIncoming(relativePath, sourceFile, buildTimestamp, buildName);
         }
     }
 
