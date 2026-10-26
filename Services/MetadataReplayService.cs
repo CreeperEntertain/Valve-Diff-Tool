@@ -63,6 +63,7 @@ internal sealed class MetadataReplayService
                 await extraction.ExtractVpkArchivesAsync(buildPath, tempDirectory, vpkEditCliPath, cancellationToken);
 
                 virtualArchive.TrackDirectory(tempDirectory, timestamp, build.Name);
+                virtualArchive.WriteDirtyMetadataFiles();
                 Console.WriteLine(
                     $"Tracked so far: {virtualArchive.TrackedFileCount:N0} logical paths, " +
                     $"{virtualArchive.TrackedVersionCount:N0} content-version records.");
