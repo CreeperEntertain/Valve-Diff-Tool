@@ -1,0 +1,85 @@
+﻿using PortalBuildMerger.Services;
+using Valve_Diff_Tool.Utilities;
+
+namespace Valve_Diff_Tool.Services;
+
+internal sealed class MetadataReplayService
+{
+    public async Task RebuildAsync(
+        string inputDirectory,
+        string mergedDirectory,
+        string vpkEditCliPath,
+        CancellationToken cancellationToken = default)
+    {
+        inputDirectory = Path.GetFullPath(inputDirectory);
+        mergedDirectory = Path.GetFullPath(mergedDirectory);
+        vpkEditCliPath = Path.GetFullPath(vpkEditCliPath);
+
+        if (!Directory.Exists(inputDirectory))
+            throw new DirectoryNotFoundException(inputDirectory);
+        if (!Directory.Exists(mergedDirectory))
+            throw new DirectoryNotFoundException($"The completed MERGED archive was not found: {mergedDirectory}");
+        if (!File.Exists(vpkEditCliPath))
+            throw new FileNotFoundException("VPKEdit CLI executable not found.", vpkEditCliPath);
+
+        List<string> builds = new BuildDiscoveryService().DiscoverAndSort(inputDirectory);
+        if (builds.Count == 0)
+            throw new InvalidOperationException($"No build directories found in '{inputDirectory}'.");
+
+        string replayRoot = Path.Combine(Path.GetTempPath(), $"Valve-Diff-Tool-MetadataReplay-{Guid.NewGuid():N}");
+
+        string tempDirectory = Path.Combine(replayRoot, "TEMP");
+
+        Directory.CreateDirectory(tempDirectory);
+
+        var directories = new DirectoryService();
+        var extraction = new ArchiveExtractionService();
+        var hashes = new HashService();
+        var virtualArchive = new MetadataArchive(mergedDirectory, null, hashes);
+
+        try
+        {
+            for (int index = 0; index < builds.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string buildPath = builds[index];
+                var build = BuildNameParser.Parse(buildPath);
+
+                DateTime timestamp = build.Date.ToDateTime(build.Time);
+
+                Console.WriteLine($"Metadata replay {index + 1}/{builds.Count}: {build.Name}");
+
+                directories.ClearDirectory(tempDirectory);
+                directories.CopySubdirectories(buildPath, tempDirectory);
+
+                await extraction.ExtractVpkArchivesAsync(buildPath, tempDirectory, vpkEditCliPath, cancellationToken);
+
+                virtualArchive.TrackDirectory(tempDirectory, timestamp, build.Name);
+            }
+
+            Console.WriteLine("Validating reconstructed paths, versions, and hashes against MERGED...");
+
+            virtualArchive.ValidateAgainstMergedArchive();
+            virtualArchive.WriteAllAndPruneStaleFiles();
+
+            Console.WriteLine($"Metadata generated for {virtualArchive.TrackedFileCount} logical file paths.");
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(replayRoot))
+                    Directory.Delete(replayRoot, recursive: true);
+            }
+            catch (IOException exception)
+            {
+                Console.Error.WriteLine($"Warning: could not remove replay directory '{replayRoot}': " + exception.Message);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                Console.Error.WriteLine($"Warning: could not remove replay directory '{replayRoot}': " + exception.Message);
+            }
+        }
+    }
+}

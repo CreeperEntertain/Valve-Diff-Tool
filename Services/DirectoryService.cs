@@ -1,39 +1,38 @@
-﻿namespace Valve_Diff_Tool.Services
+﻿namespace Valve_Diff_Tool.Services;
+
+public sealed class DirectoryService
 {
-    public sealed class DirectoryService
+    public void CopySubdirectories(string source, string destination)
     {
-        public void CopySubdirectories(string source, string destination)
+        Directory.CreateDirectory(destination);
+        foreach (string directory in Directory.GetDirectories(source))
         {
-            Directory.CreateDirectory(destination);
-            foreach (string directory in Directory.GetDirectories(source))
-            {
-                string target = Path.Combine(destination, Path.GetFileName(directory));
-                CopyDirectoryContents(directory, target);
-            }
+            string target = Path.Combine(destination, Path.GetFileName(directory));
+            CopyDirectoryContents(directory, target);
         }
+    }
 
-        private void CopyDirectoryContents(string source, string destination)
+    private void CopyDirectoryContents(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (string file in Directory.GetFiles(source))
         {
-            Directory.CreateDirectory(destination);
-            foreach (string file in Directory.GetFiles(source))
-            {
-                if (Path.GetExtension(file).Equals(".vpk", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
-            }
-            foreach (string directory in Directory.GetDirectories(source))
-                CopyDirectoryContents(directory, Path.Combine(destination, Path.GetFileName(directory)));
+            if (Path.GetExtension(file).Equals(".vpk", StringComparison.OrdinalIgnoreCase))
+                continue;
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
         }
+        foreach (string directory in Directory.GetDirectories(source))
+            CopyDirectoryContents(directory, Path.Combine(destination, Path.GetFileName(directory)));
+    }
 
-        public void ClearDirectory(string directory)
-        {
-            if (!Directory.Exists(directory))
-                return;
-            foreach (string entry in Directory.GetFileSystemEntries(directory))
-                if (Directory.Exists(entry))
-                    Directory.Delete(entry, recursive: true);
-                else
-                    File.Delete(entry);
-        }
+    public void ClearDirectory(string directory)
+    {
+        if (!Directory.Exists(directory))
+            return;
+        foreach (string entry in Directory.GetFileSystemEntries(directory))
+            if (Directory.Exists(entry))
+                Directory.Delete(entry, recursive: true);
+            else
+                File.Delete(entry);
     }
 }
