@@ -35,7 +35,14 @@ internal sealed class MetadataReplayService
         var directories = new DirectoryService();
         var extraction = new ArchiveExtractionService();
         var hashes = new HashService();
-        var virtualArchive = new MetadataArchive(mergedDirectory, null, hashes);
+
+        string metadataJournalPath = Path.Combine(Path.GetDirectoryName(mergedDirectory)!, "metadata-progress.jsonl");
+
+        var virtualArchive = new MetadataArchive(mergedDirectory, metadataJournalPath, hashes);
+
+        virtualArchive.Reset();
+
+        Console.WriteLine($"Metadata replay journal: {metadataJournalPath}");
 
         try
         {
@@ -56,6 +63,7 @@ internal sealed class MetadataReplayService
                 await extraction.ExtractVpkArchivesAsync(buildPath, tempDirectory, vpkEditCliPath, cancellationToken);
 
                 virtualArchive.TrackDirectory(tempDirectory, timestamp, build.Name);
+                Console.WriteLine($"Tracked {virtualArchive.TrackedFileCount:N0} logical file path(s).");
             }
 
             Console.WriteLine("Validating reconstructed paths, versions, and hashes against MERGED...");
