@@ -164,23 +164,17 @@ internal sealed class MetadataArchive
     }
 
     private void TrackDirectoryCore(
-    string currentDirectory,
-    string sourceRoot,
-    DateTime buildTimestamp,
-    string buildName)
+        string currentDirectory,
+        string sourceRoot,
+        DateTime buildTimestamp,
+        string buildName)
     {
         foreach (string sourceDirectory in Directory
                      .GetDirectories(currentDirectory)
                      .OrderBy(
                          path => Path.GetFileName(path),
                          StringComparer.OrdinalIgnoreCase))
-        {
-            TrackDirectoryCore(
-                sourceDirectory,
-                sourceRoot,
-                buildTimestamp,
-                buildName);
-        }
+            TrackDirectoryCore(sourceDirectory,sourceRoot,buildTimestamp,buildName);
         foreach (string sourceFile in Directory
                      .GetFiles(currentDirectory)
                      .OrderBy(
