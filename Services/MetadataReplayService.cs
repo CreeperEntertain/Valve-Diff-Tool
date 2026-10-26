@@ -63,15 +63,39 @@ internal sealed class MetadataReplayService
                 await extraction.ExtractVpkArchivesAsync(buildPath, tempDirectory, vpkEditCliPath, cancellationToken);
 
                 virtualArchive.TrackDirectory(tempDirectory, timestamp, build.Name);
+                Console.WriteLine(
+                    $"Tracked so far: {virtualArchive.TrackedFileCount:N0} logical paths, " +
+                    $"{virtualArchive.TrackedVersionCount:N0} content-version records.");
                 Console.WriteLine($"Tracked {virtualArchive.TrackedFileCount:N0} logical file path(s).");
             }
+            if (virtualArchive.TrackedFileCount == 0)
+                throw new InvalidDataException(
+                    "Post-hoc replay tracked zero logical files across all builds. " +
+                    "Metadata JSON files cannot be generated. " +
+                    "Check TEMP extraction and the discovered build directories.");
 
-            Console.WriteLine("Validating reconstructed paths, versions, and hashes against MERGED...");
-
+            Console.WriteLine(
+                $"Replay finished: {virtualArchive.TrackedFileCount:N0} logical paths, " +
+                $"{virtualArchive.TrackedVersionCount:N0} content-version records.");
+            Console.WriteLine("Validating reconstructed content hashes and paths against MERGED...");
             virtualArchive.ValidateAgainstMergedArchive();
+            Console.WriteLine("Validation passed. Writing per-directory metadata JSON files...");
             virtualArchive.WriteAllAndPruneStaleFiles();
 
-            Console.WriteLine($"Metadata generated for {virtualArchive.TrackedFileCount} logical file paths.");
+            int metadataFileCount = Directory
+                .EnumerateFiles(
+                    mergedDirectory,
+                    MetadataArchive.MetadataFileName,
+                    SearchOption.AllDirectories)
+                .Count();
+            if (metadataFileCount == 0)
+                throw new IOException(
+                    "Replay validation succeeded, but no metadata JSON files were found " +
+                    $"under '{mergedDirectory}'. Check directory permissions and the " +
+                    "metadata writer.");
+            Console.WriteLine(
+                $"Successfully wrote/found {metadataFileCount:N0} metadata JSON file(s) " +
+                $"for {virtualArchive.TrackedFileCount:N0} logical paths.");
         }
         finally
         {

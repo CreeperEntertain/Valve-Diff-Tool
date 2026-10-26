@@ -41,6 +41,9 @@ internal sealed class MetadataArchive
     public int TrackedFileCount
         => _files.Count;
 
+    public int TrackedVersionCount
+        => _files.Values.Sum(history => history.Versions.Count);
+
     public bool HasEntries
         => _files.Count > 0;
 
@@ -171,14 +174,47 @@ internal sealed class MetadataArchive
     {
         foreach (string sourceDirectory in Directory
                      .GetDirectories(currentDirectory)
-                     .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
-            TrackDirectoryCore(sourceDirectory,sourceRoot,buildTimestamp,buildName);
+                     .OrderBy(
+                         path => Path.GetFileName(path),
+                         StringComparer.OrdinalIgnoreCase))
+        {
+            string directoryName = Path.GetFileName(sourceDirectory);
+            string extension = Path.GetExtension(directoryName);
+            var numberedFiles = GetNumberedVersionFiles(sourceDirectory, extension);
+            bool isVersionDirectory = numberedFiles.Count > 0 && Directory.GetDirectories(sourceDirectory).Length == 0;
+            if (isVersionDirectory)
+            {
+                string logicalPath = NormalizeRelativePath(Path.GetRelativePath(sourceRoot, sourceDirectory));
+                bool existedBeforeThisDirectory = _files.ContainsKey(logicalPath);
+                foreach (var numberedFile in numberedFiles)
+                    RecordHash(
+                        logicalPath,
+                        _hashService.ComputeHash(numberedFile.Path),
+                        buildTimestamp,
+                        buildName,
+                        existedBeforeThisDirectory
+                            ? null
+                            : numberedFile.Version);
+                continue;
+            }
+
+            TrackDirectoryCore(sourceDirectory, sourceRoot, buildTimestamp, buildName);
+        }
+
         foreach (string sourceFile in Directory
                      .GetFiles(currentDirectory)
-                     .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(
+                         path => Path.GetFileName(path),
+                         StringComparer.OrdinalIgnoreCase))
         {
+            string filename = Path.GetFileName(sourceFile);
+            if (filename.Equals(
+                    MetadataFileName,
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+
             string relativePath = NormalizeRelativePath(Path.GetRelativePath(sourceRoot, sourceFile));
-            RecordIncoming(relativePath, sourceFile, buildTimestamp, buildName);
+            RecordHash(relativePath, _hashService.ComputeHash(sourceFile), buildTimestamp, buildName);
         }
     }
 
@@ -267,9 +303,11 @@ internal sealed class MetadataArchive
         ReadPhysicalDirectory(_mergedRoot, string.Empty, actual, layoutErrors);
 
         var errors = new List<string>(layoutErrors);
+        var reconciledVersions = new Dictionary<string, List<VersionRecord>>(_pathComparer);
 
         foreach (var expectedPair in _files)
         {
+            string logicalPath = expectedPair.Key;
             if (!actual.TryGetValue(
                     expectedPair.Key,
                     out List<PhysicalVersion>? actualVersions))
@@ -278,55 +316,75 @@ internal sealed class MetadataArchive
                 continue;
             }
 
-            List<VersionRecord> expectedVersions = expectedPair.Value.Versions
-                .OrderBy(version => version.Version ?? -1)
-                .ToList();
-            actualVersions = actualVersions
-                .OrderBy(version => version.Version ?? -1)
-                .ToList();
-
+            List<VersionRecord> expectedVersions = [.. expectedPair.Value.Versions];
             if (expectedVersions.Count != actualVersions.Count)
             {
                 errors.Add(
                     $"Version-count mismatch: {expectedPair.Key} " +
                     $"(expected {expectedVersions.Count}, " +
                     $"found {actualVersions.Count})");
-                continue;
             }
-            for (int i = 0; i < expectedVersions.Count; i++)
+
+            var expectedHashes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (VersionRecord expected in expectedVersions)
+                if (!expectedHashes.Add(expected.Sha256))
+                    errors.Add($"Duplicate SHA-256 in reconstructed history: {logicalPath} ({expected.Sha256})");
+
+            var actualByHash = new Dictionary<string, PhysicalVersion>(StringComparer.Ordinal);
+            foreach (PhysicalVersion found in actualVersions)
             {
-                VersionRecord expected = expectedVersions[i];
-                PhysicalVersion found = actualVersions[i];
-                if (expected.Version != found.Version)
+                if (!actualByHash.TryAdd(found.Sha256, found))
+                    errors.Add($"Duplicate content hash in physical versions of {{logicalPath}}: {{found.Sha256}}");
+                if (!expectedHashes.Contains(found.Sha256))
                     errors.Add(
-                        $"Version-number mismatch: {expectedPair.Key} " +
-                        $"(expected {expected.Version?.ToString() ?? "unversioned"}, " +
-                        $"found {found.Version?.ToString() ?? "unversioned"})");
-                if (!string.Equals(
-                        expected.Sha256,
-                        found.Sha256,
-                        StringComparison.Ordinal))
-                    errors.Add($"Hash mismatch: {expectedPair.Key} version {expected.Version?.ToString() ?? "unversioned"}");
+                    $"MERGED contains content not reconstructed for " +
+                    $"{logicalPath}: version " +
+                    $"{found.Version?.ToString() ?? "unversioned"}, " +
+                    $"SHA-256 {found.Sha256}");
             }
+
+            var reconciledForPath = new List<VersionRecord>();
+            bool everyExpectedHashMatched = true;
+            foreach (VersionRecord expected in expectedVersions)
+            {
+                if (!actualByHash.TryGetValue(expected.Sha256, out PhysicalVersion? found))
+                {
+                    errors.Add(
+                        $"Reconstructed content is missing from MERGED for " +
+                        $"{logicalPath}: replay version " +
+                        $"{expected.Version?.ToString() ?? "unversioned"}, " +
+                        $"SHA-256 {expected.Sha256}");
+                    everyExpectedHashMatched = false;
+                    continue;
+                }
+                reconciledForPath.Add(expected with { Version = found.Version });
+            }
+            if (everyExpectedHashMatched && reconciledForPath.Count == expectedVersions.Count)
+                reconciledVersions[logicalPath] = reconciledForPath;
         }
 
         foreach (string unexpectedPath in actual.Keys.Where(path => !_files.ContainsKey(path)))
             errors.Add($"Unexpected output path: {unexpectedPath}");
-        if (errors.Count == 0)
-            return;
-
-        string preview = string.Join(Environment.NewLine, errors.Take(12).Select(error => "  - " + error));
-        if (errors.Count > 12)
-            preview += Environment.NewLine + $"  - ... and {errors.Count - 12} more issue(s)";
-
-        throw new InvalidDataException(
-            "Metadata replay did not match the existing MERGED archive. " +
-            "No metadata sidecars were written." +
-            Environment.NewLine +
-            preview +
-            Environment.NewLine +
-            "Check that the original builds and VPK extraction tool " +
-            "match those used for the completed archive.");
+        if (errors.Count > 0)
+        {
+            string preview = string.Join(Environment.NewLine, errors.Take(20).Select(error => "  - " + error));
+            if (errors.Count > 20)
+                preview += Environment.NewLine + $"  - ... and {errors.Count - 20} more issue(s)";
+            throw new InvalidDataException(
+                "Metadata replay did not match the existing MERGED archive. " +
+                "No metadata sidecars were written." +
+                Environment.NewLine +
+                preview +
+                Environment.NewLine +
+                "Check that the original builds and VPK extraction tool " +
+                "match those used for the completed archive.");
+        }
+        foreach (var pair in reconciledVersions)
+        {
+            FileHistory history = _files[pair.Key];
+            history.Versions.Clear();
+            history.Versions.AddRange(pair.Value);
+        }
     }
 
     private void LoadJournal(string path)
@@ -430,8 +488,7 @@ internal sealed class MetadataArchive
             string extension = Path.GetExtension(directoryName);
             string logicalPath = CombineRelative(relativeParent, directoryName);
             var numberedFiles = GetNumberedVersionFiles(childDirectory, extension);
-            bool isVersionDirectory = numberedFiles.Count > 0 && _files.ContainsKey(logicalPath);
-
+            bool isVersionDirectory = numberedFiles.Count > 0;
             if (isVersionDirectory)
             {
                 result[logicalPath] = numberedFiles
