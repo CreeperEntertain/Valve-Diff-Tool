@@ -171,15 +171,11 @@ internal sealed class MetadataArchive
     {
         foreach (string sourceDirectory in Directory
                      .GetDirectories(currentDirectory)
-                     .OrderBy(
-                         path => Path.GetFileName(path),
-                         StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
             TrackDirectoryCore(sourceDirectory,sourceRoot,buildTimestamp,buildName);
         foreach (string sourceFile in Directory
                      .GetFiles(currentDirectory)
-                     .OrderBy(
-                         path => Path.GetFileName(path),
-                         StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
         {
             string relativePath = NormalizeRelativePath(Path.GetRelativePath(sourceRoot, sourceFile));
             RecordIncoming(relativePath, sourceFile, buildTimestamp, buildName);
